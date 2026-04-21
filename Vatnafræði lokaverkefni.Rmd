@@ -1,0 +1,265 @@
+---
+title: "Vatnafræði lokaverkefni"
+author: "Árni"
+date: "2026-04-18"
+output: html_document
+---
+
+```{r, message=FALSE}
+library("tidyverse")
+library("forcats")
+library("ggplot2")
+library("dplyr")
+```
+Lesum inn gögnin
+```{r}
+dat <- read.csv("C:/Users/olafs/Downloads/lamah_ice/lamah_ice/D_gauges/2_timeseries/daily/ID_67.csv", sep = ";")
+```
+Filterum út þau gögn sem við viljum ekki. Viljum bara hafa frá 1.10.1993 til 30.9.2023 og setjum á staðlað dagsetningaform.
+
+
+```{r}
+dat <- dat %>%
+  mutate(date = as.Date(paste(YYYY, MM, DD, sep = "-")))
+
+dat_30ar <- dat %>%
+  filter(date >= as.Date("1993-10-01"),
+         date <= as.Date("2023-09-30"))
+```
+
+
+3. Mat á grunnvatnsframlagi
+
+Metum grunnvatnsframlag vatnasviðsins árið 2020
+```{r}
+dat_20 <- dat %>%
+  filter(date >= as.Date("2020-01-01"),
+         date <= as.Date("2020-12-31"))
+```
+
+```{r}
+# Skilgreinum fastann fyrir Ladson aðferðina
+alpha <- 0.925
+
+dat_20$qf <- 0 #yfirborðsrennsli (quikflow)
+dat_20$qb <- 0 #grunnrennsli (baseflow)
+
+# Förum í gegnum gögnin dag fyrir dag
+for (i in 2:nrow(dat_20)) {
+  
+  # Rennsli í dag og í gær
+  q_dag <- dat_20$qobs[i]
+  q_gaer <- dat_20$qobs[i - 1]
+  
+  # Quickflow frá deginum áður
+  qf_fyrri <- dat_20$qf[i - 1]
+  
+  # Ladson aðferðin
+  qf_nytt <- alpha * qf_fyrri + ((1 + alpha) / 2) * (q_dag - q_gaer)
+  
+  # Quickflow má ekki vera neikvætt
+  if (qf_nytt < 0) {
+    qf_nytt <- 0
+  }
+  
+  # Quickflow má ekki vera stærra en heildarrennslið
+  if (qf_nytt > q_dag) {
+    qf_nytt <- q_dag
+  }
+  
+  # Baseflow er afgangurinn af heildarrennslinu
+  qb_nytt <- q_dag - qf_nytt
+  
+  dat_20$qf[i] <- qf_nytt
+  dat_20$qb[i] <- qb_nytt
+}
+
+#Reiknum baseflow inded (BFI)
+heildar_rennsli <- sum(dat_20$qobs) /365
+heildar_baseflow <- sum(dat_20$qb) /365
+BFI <- heildar_baseflow / heildar_rennsli
+
+cat("Heildarrennsli yfir tímabilið:", round(heildar_rennsli, 3), "\n")
+cat("Heildargrunnrennsli yfir tímabilið:", round(heildar_baseflow, 3), "\n")
+cat("Baseflow Index (BFI):", round(BFI, 3), "\n")
+
+#Setjum upp graf
+library(ggplot2)
+
+ggplot(dat_20, aes(x = date)) +
+  geom_area(aes(y = qb), fill = "steelblue", alpha = 0.6) +
+  geom_line(aes(y = qobs), color = "black", linewidth = 0.4) +
+  labs(
+    title = "Heildarrennsli og áætlað grunnrennsli",
+    x = "",
+    y = "Rennsli (m3/S)") + theme_minimal()
+```
+
+
+
+Rýrnunarstuðull
+
+Finnum tímabil sem sýna lækkun í rennsli yfir sumartíma
+```{r}
+# Fyrsta tímabil
+rec_1 <- subset(dat_30ar, date >= as.Date("1998-06-03") & date <= as.Date("1998-06-14"))
+rec_1$t <- 0:(nrow(rec_1) - 1)
+fit_1 <- lm(log(qobs) ~ t, data = rec_1)
+k_1 <- -1 / coef(fit_1)[2]
+
+# Annað tímabil
+rec_2 <- subset(dat_30ar, date >= as.Date("2013-06-10") & date <= as.Date("2013-06-25"))
+rec_2$t <- 0:(nrow(rec_2) - 1)
+fit_2 <- lm(log(qobs) ~ t, data = rec_2)
+k_2 <- -1 / coef(fit_2)[2]
+
+# Þriðja tímabil
+rec_3 <- subset(dat_30ar, date >= as.Date("2019-05-22") & date <= as.Date("2019-06-09"))
+rec_3$t <- 0:(nrow(rec_3) - 1)
+fit_3 <- lm(log(qobs) ~ t, data = rec_3)
+k_3 <- -1 / coef(fit_3)[2]
+
+# Meðaltal
+medal_k <- mean(c(k_1, k_2, k_3))
+
+cat("k_1 =", round(k_1, 2), "dagar\n")
+cat("k_2 =", round(k_2, 2), "dagar\n")
+cat("k_3 =", round(k_3, 2), "dagar\n")
+cat("Meðal-k =", round(medal_k, 2), "dagar\n")
+```
+Liður 5
+```{r}
+# Tökum rennslisgildin
+Q <- dat_30ar$qobs
+
+# Röðum frá hæsta til lægsta
+Q_sorted <- sort(Q, decreasing = TRUE)
+
+# Fjöldi mælinga
+n <- length(Q_sorted)
+
+# Exceedance probability (%)
+p_exceed <- 100 * (1:n) / (n + 1)
+
+# Finna Q5, Q50 og Q95
+Q5  <- quantile(Q, probs = 0.95)
+Q50 <- quantile(Q, probs = 0.50)
+Q95 <- quantile(Q, probs = 0.05)
+
+cat("Q5 =", round(Q5, 2), "\n")
+cat("Q50 =", round(Q50, 2), "\n")
+cat("Q95 =", round(Q95, 2), "\n")
+
+# Teikna flow duration curve
+ggplot(fdc, aes(x = p_exceed, y = Q_sorted)) +
+  geom_line(linewidth = 1) +
+  labs(
+    title = "Langæislína rennslis",
+    x = "Prósenta tímans þegar rennsli fer yfir (%)",
+    y = "Rennsli (m3/s)"
+  ) +
+  theme_minimal()
+```
+Liður 7
+Leitnigreining
+
+Bútur 1
+```{r, message=FALSE, warning=FALSE}
+library(dplyr)
+library(lubridate)
+library(trend)
+library(modifiedmk)
+library(ggplot2)
+
+#Búum til dagsetningar
+dat_30ar <- dat_30ar %>%
+  mutate(
+    date = as.Date(date),
+    year = year(date),
+    month = month(date),
+    
+    #Skilgreinum vatnsár
+    water_year = ifelse(month >= 10, year + 1, year),
+    season = case_when(
+      month %in% c(12, 1, 2) ~ "Vetur",
+      month %in% c(3, 4, 5) ~ "Vor",
+      month %in% c(6, 7, 8) ~ "Sumar",
+      month %in% c(9, 10, 11) ~ "Haust"
+    ),
+    season_year = ifelse(month == 12, year + 1, year)
+  )
+```
+
+Bútur 2
+```{r}
+
+#Árlegt meðalrennsli
+annual_q <- dat_30ar %>%
+  group_by(water_year) %>%
+  summarise(Q_mean = mean(qobs, na.rm = TRUE), .groups = "drop")
+
+#Árstíð meðalrennsli
+seasonal_q <- dat_30ar %>%
+  group_by(season_year, season) %>%
+  summarise(Q_mean = mean(qobs, na.rm = TRUE), .groups = "drop")
+
+#Búa til töflu
+trend_results <- data.frame(
+  timabil = c("Árlegt", "Vetur", "Vor", "Sumar", "Haust"),
+  sen_slope = c(
+    as.numeric(sens.slope(annual_q$Q_mean)$estimates),
+    as.numeric(sens.slope(seasonal_q$Q_mean[seasonal_q$season == "Vetur"])$estimates),
+    as.numeric(sens.slope(seasonal_q$Q_mean[seasonal_q$season == "Vor"])$estimates),
+    as.numeric(sens.slope(seasonal_q$Q_mean[seasonal_q$season == "Sumar"])$estimates),
+    as.numeric(sens.slope(seasonal_q$Q_mean[seasonal_q$season == "Haust"])$estimates)
+  ),
+  p_value = c(
+    as.numeric(mmkh(annual_q$Q_mean)["new P-value"]),
+    as.numeric(mmkh(seasonal_q$Q_mean[seasonal_q$season == "Vetur"])["new P-value"]),
+    as.numeric(mmkh(seasonal_q$Q_mean[seasonal_q$season == "Vor"])["new P-value"]),
+    as.numeric(mmkh(seasonal_q$Q_mean[seasonal_q$season == "Sumar"])["new P-value"]),
+    as.numeric(mmkh(seasonal_q$Q_mean[seasonal_q$season == "Haust"])["new P-value"])
+  )
+)
+
+#Skilgreina hvenær marktækt og hvenær ekki
+trend_results$leitni <- ifelse(
+  trend_results$p_value < 0.05 & trend_results$sen_slope > 0,
+  "Marktæk aukning",
+  ifelse(
+    trend_results$p_value < 0.05 & trend_results$sen_slope < 0,
+    "Marktæk minnkun",
+    "Engin marktæk leitni"
+  )
+)
+
+#Skila niðurstöðum
+trend_results
+```
+
+Bútur 3
+```{r}
+ggplot(annual_q, aes(x = water_year, y = Q_mean)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(
+    title = "Árlegt meðalrennsli eftir vatnaári",
+    x = "Vatnaár",
+    y = "Meðalrennsli (m3/s)"
+  ) +
+  theme_minimal()
+
+ggplot(seasonal_q, aes(x = season_year, y = Q_mean)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE) +
+  facet_wrap(~season, scales = "free_y") +
+  labs(
+    title = "Árstíðabundið meðalrennsli",
+    x = "Ár",
+    y = "Meðalrennsli (m3/s)"
+  ) +
+  theme_minimal()
+```
+
+
+
